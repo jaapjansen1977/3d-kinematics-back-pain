@@ -296,6 +296,63 @@ def phase_portrait_figure(phase_data: pd.DataFrame, title: str, color: str) -> g
     return fig
 
 
+def hip_lumbar_angle_angle_figure(normalized: pd.DataFrame) -> go.Figure:
+    """Toon de heup-rugverdeling zonder de bestaande analyse te wijzigen."""
+    fig = go.Figure()
+    for repetition, block in normalized.groupby("repetition", sort=True):
+        fig.add_trace(go.Scatter(
+            x=block["hip_flex_mean_deg"],
+            y=block["lumbar_flex_rel_deg"],
+            mode="lines",
+            line=dict(color="rgba(104,116,122,0.22)", width=1),
+            name=f"Herhaling {int(repetition)}",
+            customdata=np.column_stack((
+                block["cycle_pct"].to_numpy(float),
+                np.repeat(repetition, len(block)),
+            )),
+            hovertemplate=(
+                "Herhaling %{customdata[1]:.0f}<br>"
+                "Cyclus %{customdata[0]:.0f}%<br>"
+                "Heup %{x:.1f}°<br>Rug %{y:.1f}°<extra></extra>"
+            ),
+            showlegend=False,
+        ))
+
+    mean_curve = normalized.groupby("cycle_pct", as_index=False)[
+        ["hip_flex_mean_deg", "lumbar_flex_rel_deg"]
+    ].mean()
+    fig.add_trace(go.Scatter(
+        x=mean_curve["hip_flex_mean_deg"],
+        y=mean_curve["lumbar_flex_rel_deg"],
+        mode="lines",
+        line=dict(color="#315f73", width=4),
+        name="Gemiddelde beweging",
+        customdata=mean_curve["cycle_pct"],
+        hovertemplate=(
+            "Gemiddelde<br>Cyclus %{customdata:.0f}%<br>"
+            "Heup %{x:.1f}°<br>Rug %{y:.1f}°<extra></extra>"
+        ),
+    ))
+    fig.add_trace(go.Scatter(
+        x=[mean_curve["hip_flex_mean_deg"].iloc[0]],
+        y=[mean_curve["lumbar_flex_rel_deg"].iloc[0]],
+        mode="markers",
+        marker=dict(color="#315f73", size=11, symbol="triangle-right"),
+        name="Start",
+        hovertemplate="Start van de bukcyclus<extra></extra>",
+    ))
+    fig.update_layout(
+        template="plotly_white",
+        height=470,
+        title="Heupbeweging ten opzichte van rugbeweging",
+        margin=dict(l=20, r=20, t=50, b=20),
+        xaxis_title="Heupflexie (°)",
+        yaxis_title="Rugflexie ten opzichte van het bekken (°)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
 st.markdown(
     """<div class="hero"><h1>Bukbewegingsanalyse</h1>
     <p>Klinische kinematica, herhaalbaarheid en interjoint-coördinatie uit een Excelbestand.</p></div>""",
@@ -468,6 +525,41 @@ with tabs[4]:
             border=True,
         )
         phase_results.append({"signal": title, **phase_metrics})
+
+    st.subheader(
+        "Heup ten opzichte van rug",
+        help=(
+            "Dit diagram zet de heuphoek tegen de rughoek uit. Iedere dunne lijn is één bukbeweging. "
+            "Lijnen die dicht bij elkaar liggen betekenen dat iemand de beweging telkens ongeveer op "
+            "dezelfde manier verdeelt tussen heup en rug. Dit heet nauwkeuriger een hoek-hoekdiagram."
+        ),
+    )
+    st.plotly_chart(
+        hip_lumbar_angle_angle_figure(tables["normalized_waveforms"]),
+        use_container_width=True,
+        key="hip_lumbar_angle_angle",
+    )
+    coupling_left, coupling_right = st.columns(2)
+    coupling_left.metric(
+        "Variatie in heup-rugsamenwerking",
+        metric_value(coupling["mean_vector_coding_variability_deg"], "°"),
+        help=(
+            "Geeft aan hoe sterk de verdeling tussen heup- en rugbeweging wisselt tussen de herhalingen. "
+            "Lager betekent een meer gelijkende samenwerking. Hoger betekent meer variatie. Er is geen "
+            "algemene grens voor goed of slecht."
+        ),
+        border=True,
+    )
+    coupling_right.metric(
+        "Variatie in onderlinge timing",
+        metric_value(coupling["mean_crp_variability_deg"], "°"),
+        help=(
+            "Geeft aan hoeveel de timing tussen heup en rug van herhaling tot herhaling verandert. "
+            "Lager betekent een meer gelijkende timing. Beoordeel dit altijd samen met het diagram en "
+            "de klachten van de persoon."
+        ),
+        border=True,
+    )
 
     overall_variability = float(np.mean([row["phase_portrait_variability"] for row in phase_results]))
     st.metric(
