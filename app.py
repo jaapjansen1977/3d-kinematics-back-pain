@@ -234,13 +234,15 @@ if qc["warnings"]:
     for warning in qc["warnings"]:
         st.warning(warning)
 
-top = st.columns(6)
-top[0].metric("Herhalingen", f"{qc['detected_repetitions']}", help="Aantal automatisch gedetecteerde en geanalyseerde bukcycli.", border=True)
-top[1].metric("Cyclustijd", metric_value(reps["cycle_duration_s"].mean(), " s"), help=EXACT_HELP["cycle_duration_s"], border=True)
-top[2].metric("Heup-ROM", metric_value(0.5 * (reps["hip_flex_deg_L_robust_rom_deg"].mean() + reps["hip_flex_deg_R_robust_rom_deg"].mean()), "°"), help="Gemiddelde robuuste ROM van linker- en rechterheup over alle herhalingen.", border=True)
-top[3].metric("Rug-ROM", metric_value(reps["lumbar_flex_rel_deg_robust_rom_deg"].mean(), "°"), help=EXACT_HELP["lumbar_flex_rel_deg_robust_rom_deg"], border=True)
-top[4].metric("Heupstabiliteit", metric_value(wave.loc["hip_flex_mean_deg", "mean_pointwise_sd_deg"], "°"), help=EXACT_HELP["mean_pointwise_sd_deg"], border=True)
-top[5].metric("Couplingvariabiliteit", metric_value(coupling["mean_vector_coding_variability_deg"], "°"), help=EXACT_HELP["mean_vector_coding_variability_deg"], border=True)
+top_primary = st.columns(3)
+top_primary[0].metric("Herhalingen", f"{qc['detected_repetitions']}", help="Aantal automatisch gedetecteerde en geanalyseerde bukcycli.", border=True)
+top_primary[1].metric("Cyclustijd", metric_value(reps["cycle_duration_s"].mean(), " s"), help=EXACT_HELP["cycle_duration_s"], border=True)
+top_primary[2].metric("Heup-ROM", metric_value(0.5 * (reps["hip_flex_deg_L_robust_rom_deg"].mean() + reps["hip_flex_deg_R_robust_rom_deg"].mean()), "°"), help="Gemiddelde robuuste ROM van linker- en rechterheup over alle herhalingen.", border=True)
+
+top_secondary = st.columns(3)
+top_secondary[0].metric("Rug-ROM", metric_value(reps["lumbar_flex_rel_deg_robust_rom_deg"].mean(), "°"), help=EXACT_HELP["lumbar_flex_rel_deg_robust_rom_deg"], border=True)
+top_secondary[1].metric("Heupstabiliteit", metric_value(wave.loc["hip_flex_mean_deg", "mean_pointwise_sd_deg"], "°"), help=EXACT_HELP["mean_pointwise_sd_deg"], border=True)
+top_secondary[2].metric("Couplingvariabiliteit", metric_value(coupling["mean_vector_coding_variability_deg"], "°"), help=EXACT_HELP["mean_vector_coding_variability_deg"], border=True)
 
 tabs = st.tabs(["Overzicht", "ROM & tempo", "Stabiliteit & coupling", "Deviaties & regulariteit", "Methode & export"])
 
