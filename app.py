@@ -179,6 +179,123 @@ def line_by_repetition(df: pd.DataFrame, columns: list[tuple[str, str, str]], y_
     return fig
 
 
+PHASE_PORTRAIT_HELP = (
+    "Een faseportret zet de hoek van een gewricht of segment op de horizontale as "
+    "en de snelheid daarvan op de verticale as. Iedere bukbeweging vormt een lus. "
+    "Lussen die dicht bij elkaar liggen betekenen dat de bewegingen sterk op elkaar lijken. "
+    "Meer spreiding betekent meer variatie in houding, snelheid of beide."
+)
+
+
+def phase_portrait_data(
+    normalized: pd.DataFrame,
+    repetitions: pd.DataFrame,
+    signal: str,
+) -> pd.DataFrame:
+    """Maak hoek-hoeksnelheidsdata met echte cyclustijd per herhaling."""
+    durations = repetitions.set_index("repetition")["cycle_duration_s"]
+    blocks = []
+    for repetition, block in normalized.groupby("repetition", sort=True):
+        block = block.sort_values("cycle_pct")
+        angle = block[signal].to_numpy(float)
+        duration = float(durations.loc[repetition])
+        dt = duration / max(len(angle) - 1, 1)
+        velocity = np.gradient(angle, dt)
+        blocks.append(pd.DataFrame({
+            "repetition": int(repetition),
+            "cycle_pct": block["cycle_pct"].to_numpy(float),
+            "angle_deg": angle,
+            "velocity_deg_s": velocity,
+        }))
+    return pd.concat(blocks, ignore_index=True)
+
+
+def phase_portrait_metrics(phase_data: pd.DataFrame) -> dict[str, float]:
+    """Genormaliseerde lusafstand en variatie in lusoppervlakte."""
+    angle_matrix = phase_data.pivot(index="repetition", columns="cycle_pct", values="angle_deg").to_numpy()
+    velocity_matrix = phase_data.pivot(index="repetition", columns="cycle_pct", values="velocity_deg_s").to_numpy()
+
+    angle_low, angle_high = np.percentile(angle_matrix, [5, 95])
+    angle_center = 0.5 * (angle_low + angle_high)
+    angle_scale = max(0.5 * (angle_high - angle_low), 1e-9)
+    velocity_scale = max(float(np.percentile(np.abs(velocity_matrix), 95)), 1e-9)
+    angle_normalized = (angle_matrix - angle_center) / angle_scale
+    velocity_normalized = velocity_matrix / velocity_scale
+    mean_angle = angle_normalized.mean(axis=0)
+    mean_velocity = velocity_normalized.mean(axis=0)
+    distance = np.hypot(
+        angle_normalized - mean_angle,
+        velocity_normalized - mean_velocity,
+    )
+
+    areas = []
+    for angle, velocity in zip(angle_matrix, velocity_matrix):
+        closed_angle = np.r_[angle, angle[0]]
+        closed_velocity = np.r_[velocity, velocity[0]]
+        area = 0.5 * np.abs(np.sum(
+            closed_angle[:-1] * closed_velocity[1:]
+            - closed_angle[1:] * closed_velocity[:-1]
+        ))
+        areas.append(float(area))
+    areas = np.asarray(areas)
+    area_mean = float(np.mean(areas))
+    area_cv = (
+        100.0 * float(np.std(areas, ddof=1)) / area_mean
+        if len(areas) > 1 and area_mean > 1e-9
+        else np.nan
+    )
+    return {
+        "phase_portrait_variability": float(np.mean(distance)),
+        "loop_area_mean": area_mean,
+        "loop_area_cv_pct": area_cv,
+    }
+
+
+def phase_portrait_figure(phase_data: pd.DataFrame, title: str, color: str) -> go.Figure:
+    fig = go.Figure()
+    for repetition, block in phase_data.groupby("repetition", sort=True):
+        fig.add_trace(go.Scatter(
+            x=block["angle_deg"],
+            y=block["velocity_deg_s"],
+            mode="lines",
+            line=dict(color="rgba(104,116,122,0.22)", width=1),
+            name=f"Herhaling {int(repetition)}",
+            customdata=np.column_stack((block["cycle_pct"], np.repeat(repetition, len(block)))),
+            hovertemplate="Herhaling %{customdata[1]:.0f}<br>Cyclus %{customdata[0]:.0f}%<br>Hoek %{x:.1f}°<br>Snelheid %{y:.1f}°/s<extra></extra>",
+            showlegend=False,
+        ))
+
+    mean_curve = phase_data.groupby("cycle_pct", as_index=False)[["angle_deg", "velocity_deg_s"]].mean()
+    fig.add_trace(go.Scatter(
+        x=mean_curve["angle_deg"],
+        y=mean_curve["velocity_deg_s"],
+        mode="lines",
+        line=dict(color=color, width=4),
+        name="Gemiddelde lus",
+        customdata=mean_curve["cycle_pct"],
+        hovertemplate="Gemiddelde<br>Cyclus %{customdata:.0f}%<br>Hoek %{x:.1f}°<br>Snelheid %{y:.1f}°/s<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[mean_curve["angle_deg"].iloc[0]],
+        y=[mean_curve["velocity_deg_s"].iloc[0]],
+        mode="markers",
+        marker=dict(color=color, size=11, symbol="triangle-right"),
+        name="Start",
+        hovertemplate="Start van de bukcyclus<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_width=1, line_color="#c6cecb")
+    fig.update_layout(
+        template="plotly_white",
+        height=430,
+        title=title,
+        margin=dict(l=20, r=20, t=50, b=20),
+        xaxis_title="Hoekpositie (°)",
+        yaxis_title="Hoeksnelheid (°/s)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
 st.markdown(
     """<div class="hero"><h1>Bukbewegingsanalyse</h1>
     <p>Klinische kinematica, herhaalbaarheid en interjoint-coördinatie uit een Excelbestand.</p></div>""",
@@ -244,7 +361,7 @@ top_secondary[0].metric("Rug-ROM", metric_value(reps["lumbar_flex_rel_deg_robust
 top_secondary[1].metric("Heupstabiliteit", metric_value(wave.loc["hip_flex_mean_deg", "mean_pointwise_sd_deg"], "°"), help=EXACT_HELP["mean_pointwise_sd_deg"], border=True)
 top_secondary[2].metric("Couplingvariabiliteit", metric_value(coupling["mean_vector_coding_variability_deg"], "°"), help=EXACT_HELP["mean_vector_coding_variability_deg"], border=True)
 
-tabs = st.tabs(["Overzicht", "ROM & tempo", "Stabiliteit & coupling", "Deviaties & regulariteit", "Methode & export"])
+tabs = st.tabs(["Overzicht", "ROM & tempo", "Stabiliteit & coupling", "Deviaties & regulariteit", "Faseportretten", "Methode & export"])
 
 with tabs[0]:
     st.subheader("Gemiddelde bewegingsprofielen")
@@ -308,6 +425,68 @@ with tabs[3]:
     st.dataframe(nonlinear, column_config=nonlinear_config, hide_index=True, use_container_width=True)
 
 with tabs[4]:
+    st.subheader("Faseportretten", help=PHASE_PORTRAIT_HELP)
+    st.write(
+        "Iedere dunne lijn is één bukbeweging. De dikke lijn is het gemiddelde. "
+        "Als de dunne lussen dicht bij elkaar liggen, voert iemand de beweging telkens vergelijkbaar uit."
+    )
+
+    phase_specs = [
+        ("hip_flex_mean_deg", "Heup", "#23796d", "De gemiddelde buigstand van de linker- en rechterheup."),
+        ("lumbar_flex_rel_deg", "Rug ten opzichte van het bekken", "#486794", "De rugbeweging die overblijft nadat de beweging van het bekken van de rompbeweging is afgetrokken."),
+        ("pelvis_flex_deg", "Bekken in de ruimte", "#e07c3c", "Hoe het bekken voor- en achterover beweegt ten opzichte van de ruimte."),
+    ]
+    phase_results = []
+    for signal, title, color, plain_help in phase_specs:
+        st.subheader(title, help=f"{plain_help} {PHASE_PORTRAIT_HELP}")
+        phase_data = phase_portrait_data(tables["normalized_waveforms"], reps, signal)
+        phase_metrics = phase_portrait_metrics(phase_data)
+        st.plotly_chart(
+            phase_portrait_figure(phase_data, title, color),
+            use_container_width=True,
+            key=f"phase_portrait_{signal}",
+        )
+        m1, m2 = st.columns(2)
+        m1.metric(
+            "Patroonvariabiliteit",
+            metric_value(phase_metrics["phase_portrait_variability"], "", 3),
+            help=(
+                "Eén getal voor hoeveel de lussen van elkaar verschillen. De berekening kijkt tegelijk "
+                "naar de hoek en de snelheid. Lager betekent dat de herhalingen meer op elkaar lijken. "
+                "Hoger betekent meer variatie. Dit is geen rapportcijfer en er bestaat nog geen grens voor goed of slecht."
+            ),
+            border=True,
+        )
+        m2.metric(
+            "Variatie in lusgrootte",
+            metric_value(phase_metrics["loop_area_cv_pct"], "%", 1),
+            help=(
+                "Laat zien hoeveel de grootte van de lussen wisselt tussen herhalingen. De lus wordt groter "
+                "bij een grotere beweging en/of hogere snelheid. Lager betekent een constantere combinatie "
+                "van bewegingsuitslag en tempo."
+            ),
+            border=True,
+        )
+        phase_results.append({"signal": title, **phase_metrics})
+
+    overall_variability = float(np.mean([row["phase_portrait_variability"] for row in phase_results]))
+    st.metric(
+        "Totale patroonvariabiliteit van heup, rug en bekken",
+        metric_value(overall_variability, "", 3),
+        help=(
+            "Het gemiddelde van de drie patroonvariabiliteiten hierboven. Lager betekent dat de totale "
+            "bukstrategie van herhaling tot herhaling gelijkmatiger is. Bekijk altijd ook de drie losse "
+            "diagrammen: hetzelfde totaalgetal kan door de heup, rug of het bekken worden veroorzaakt."
+        ),
+        border=True,
+    )
+    st.markdown(
+        "<div class='notice'>Meer variatie is niet automatisch slecht en minder variatie is niet automatisch goed. "
+        "Gebruik dit samen met pijn, functie, taakuitvoering en de andere kinematische uitkomsten.</div>",
+        unsafe_allow_html=True,
+    )
+
+with tabs[5]:
     st.subheader("Methode en beperkingen")
     st.markdown(
         """
@@ -317,7 +496,23 @@ with tabs[4]:
         - DFA wordt bij deze korte test bewust niet berekend; daarvoor is een veel langere reeks nodig.
         """
     )
-    methods = tables["methods"]
+    methods = pd.concat([
+        tables["methods"],
+        pd.DataFrame([
+            {
+                "topic": "Faseportret en motorische controle",
+                "reference": "Spinelli BA et al. Using Kinematics and a Dynamical Systems Approach to Enhance Understanding of Clinically Observed Aberrant Movement Patterns. Man Ther. 2015.",
+                "doi_or_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4286536/",
+                "use_in_script": "Hoekpositie en hoeksnelheid gezamenlijk visualiseren in een faseportret.",
+            },
+            {
+                "topic": "Variabiliteit in faseportretten",
+                "reference": "DiBerardino LA et al. Quantifying complexity and variability in phase portraits of gait. Clin Biomech. 2010.",
+                "doi_or_url": "https://pubmed.ncbi.nlm.nih.gov/20399549/",
+                "use_in_script": "Wetenschappelijke basis voor het kwantificeren van spreiding tussen faseportretten; de dashboardscore blijft exploratief.",
+            },
+        ]),
+    ], ignore_index=True)
     st.dataframe(methods, column_config={
         "topic": st.column_config.TextColumn("Onderwerp", help="Onderdeel van de analyse waarop de bron betrekking heeft."),
         "reference": st.column_config.TextColumn("Wetenschappelijke bron", help="Publicatie waarop de methode of beperking is gebaseerd.", width="large"),
